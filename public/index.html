@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anonymous Group Chat</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        #chat, #join, #usernameSection { display: none; }
+        #messages { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        input[type="text"] { width: 70%; padding: 5px; }
+        button { padding: 5px 10px; }
+        #chatList { margin-bottom: 20px; }
+        .chat-item { cursor: pointer; padding: 5px; margin: 5px 0; background: #f0f0f0; }
+        #shareLink { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Anonymous Group Chat</h1>
+    <div id="usernameSection">
+        <input type="text" id="usernameInput" placeholder="Enter your username">
+        <button id="setUsername">Set Username</button>
+    </div>
+    <div id="join">
+        <span id="currentUsername"></span>
+        <input type="text" id="newChatName" placeholder="Enter new chat name">
+        <button id="createChat">Create New Chat</button>
+        <div id="chatList"></div>
+    </div>
+    <div id="chat">
+        <h2 id="currentChatName"></h2>
+        <div id="shareLink"></div>
+        <div id="messages"></div>
+        <input type="text" id="message" placeholder="Type a message...">
+        <button id="sendMessage">Send</button>
+        <button id="leaveChat">Leave Chat</button>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
