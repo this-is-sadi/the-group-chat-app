@@ -7,7 +7,7 @@ console.log('VAPID_PRIVATE_KEY:', process.env.VAPID_PRIVATE_KEY);
 const mongoose = require('mongoose');
 
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('MongoDB connected'))
   .catch(err => console.log(err));
 
@@ -30,8 +30,6 @@ const server = http.createServer(app);
 const io = socketIo(server);
 
 const PORT = process.env.PORT || 3000;
-console.log('VAPID_PUBLIC_KEY:', process.env.VAPID_PUBLIC_KEY);
-console.log('VAPID_PRIVATE_KEY:', process.env.VAPID_PRIVATE_KEY);
 
 const webpush = require('web-push');
 
@@ -40,11 +38,6 @@ webpush.setVapidDetails(
   process.env.VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 );
-
-//more logging
-console.log('VAPID details set with:');
-console.log('VAPID_PUBLIC_KEY:', process.env.VAPID_PUBLIC_KEY);
-console.log('VAPID_PRIVATE_KEY:', process.env.VAPID_PRIVATE_KEY);
 
 const subscriptions = new Map();
 
