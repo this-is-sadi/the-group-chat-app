@@ -70,6 +70,43 @@ usernameInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') setUsername();
 });
 
+function joinChat(chatId, chatName) {
+  if (currentChatId === chatId || isJoining) {
+    console.log('Already in this chat or joining process in progress');
+    return;
+  }
+
+  isJoining = true;
+  currentChatId = chatId;
+  joinDiv.style.display = 'none';
+  chatDiv.style.display = 'block';
+  
+  // Set a temporary name if chatName is not provided
+  currentChatNameH2.textContent = chatName || 'Loading...';
+  
+  const shareLink = `${window.location.origin}/chat/${chatId}`;
+  shareLinkDiv.innerHTML = `Share this link: <a href="${shareLink}" target="_blank">${shareLink}</a>`;
+  socket.emit('joinChat', chatId);
+
+  // Add or update chat in local storage
+  let chats = JSON.parse(localStorage.getItem('chats') || '[]');
+  const existingChatIndex = chats.findIndex(chat => chat.id === chatId);
+  if (existingChatIndex !== -1) {
+    chats[existingChatIndex].name = chatName || chats[existingChatIndex].name;
+  } else {
+    chats.push({ id: chatId, name: chatName || 'Unnamed Chat' });
+  }
+  localStorage.setItem('chats', JSON.stringify(chats));
+
+  // Update chat list in UI
+  updateChatList();
+
+  // Update URL
+  history.pushState(null, '', `/chat/${chatId}`);
+
+  isJoining = false;
+}
+
 
 function updateChatList() {
   const chats = JSON.parse(localStorage.getItem('chats') || '[]');
@@ -107,7 +144,7 @@ function setUsername() {
 document.getElementById('createChat').addEventListener('click', function() {
   const chatName = prompt("Enter a name for the new chat:");
   if (chatName && chatName.trim() !== '') {
-      socket.emit('createChat', chatName.trim());
+    socket.emit('createChat', chatName.trim());
   }
 });
 
@@ -127,52 +164,6 @@ function sendMessage() {
     socket.emit('sendMessage', { chatId: currentChatId, message });
     messageInput.value = '';
   }
-}
-
-function leaveChat() {
-  // Function to leave the current chat, go back to main page
-  currentChatId = null;
-  document.getElementById('join').style.display = 'block';
-  document.getElementById('chat').style.display = 'none';
-  document.getElementById('messages').innerHTML = '';
-  updateChatList();
-}
-
-function joinChat(chatId, chatName) {
-  if (currentChatId === chatId || isJoining) {
-    console.log('Already in this chat or joining process in progress');
-    return;
-  }
-
-  isJoining = true;
-  currentChatId = chatId;
-  joinDiv.style.display = 'none';
-  chatDiv.style.display = 'block';
-  
-  // Set a temporary name if chatName is not provided
-  currentChatNameH2.textContent = chatName || 'Loading...';
-  
-  const shareLink = `${window.location.origin}/chat/${chatId}`;
-  shareLinkDiv.innerHTML = `Share this link: <a href="${shareLink}" target="_blank">${shareLink}</a>`;
-  socket.emit('joinChat', chatId);
-
-  // Add or update chat in local storage
-  let chats = JSON.parse(localStorage.getItem('chats') || '[]');
-  const existingChatIndex = chats.findIndex(chat => chat.id === chatId);
-  if (existingChatIndex !== -1) {
-    chats[existingChatIndex].name = chatName || chats[existingChatIndex].name;
-  } else {
-    chats.push({ id: chatId, name: chatName || 'Unnamed Chat' });
-  }
-  localStorage.setItem('chats', JSON.stringify(chats));
-
-  // Update chat list in UI
-  updateChatList();
-
-  // Update URL
-  history.pushState(null, '', `/chat/${chatId}`);
-
-  isJoining = false;
 }
 
 socket.on('usernameSet', (newUsername) => {
@@ -348,21 +339,6 @@ function subscribeUserToPush() {
     });
 }
 
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding)
-    .replace(/\-/g, '+')
-    .replace(/_/g, '/');
-
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
-
 function sendSubscriptionToServer(subscription) {
   console.log('Sending subscription to server:', subscription);
   return fetch('/api/save-subscription/', {
@@ -436,7 +412,6 @@ function init() {
   document.getElementById('setUsername').addEventListener('click', setUsername);
   document.getElementById('createChat').addEventListener('click', createChat);
   document.getElementById('sendMessage').addEventListener('click', sendMessage);
-  document.getElementById('leaveChat').addEventListener('click', leaveChat);
   document.getElementById('message').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
   });

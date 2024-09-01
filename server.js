@@ -4,6 +4,22 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 console.log('VAPID_PUBLIC_KEY:', process.env.VAPID_PUBLIC_KEY);
 console.log('VAPID_PRIVATE_KEY:', process.env.VAPID_PRIVATE_KEY);
 
+const mongoose = require('mongoose');
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.log(err));
+
+
+// Define Chat schema and model
+const chatSchema = new mongoose.Schema({
+  name: String,
+  messages: [String]
+});
+
+const Chat = mongoose.model('Chat', chatSchema);
+
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -17,13 +33,7 @@ const PORT = process.env.PORT || 3000;
 console.log('VAPID_PUBLIC_KEY:', process.env.VAPID_PUBLIC_KEY);
 console.log('VAPID_PRIVATE_KEY:', process.env.VAPID_PRIVATE_KEY);
 
-// In-memory storage for chats
-const chats = new Map();
-
 const webpush = require('web-push');
-
-//const VAPID_PUBLIC_KEY = 'BC02JhYA5eBbV2vpiGdEmDEJDb8O1N6ptk1I9aVfh9yc4yso3Pcmtqm-Gu-3TMekLub0XOdfdXCCkuFGjlv1UMg';
-//const VAPID_PRIVATE_KEY = '83K2zDaCpg1kOLKqGwTTIwknUrSAggtGpVxrWYP2tg0';
 
 webpush.setVapidDetails(
   'mailto:wallawallaeats@email.com',
@@ -64,30 +74,29 @@ io.on('connection', (socket) => {
   console.log('New client connected', socket.id);
   let username = null;
 
+  // Set the username for the socket
   socket.on('setUsername', (newUsername) => {
     username = newUsername;
-    socket.username = newUsername;  // Add this line
+    socket.username = newUsername;
     socket.emit('usernameSet', username);
     console.log(`Username set: ${username}`);
   });
 
-  socket.on('createChat', (chatName) => {
-    const chatId = uuidv4();
-    chats.set(chatId, { name: chatName, messages: [] });
-    socket.emit('chatCreated', { id: chatId, name: chatName });
-    console.log(`Chat created: ${chatId} - ${chatName}`);
+  // Create a new chat and save it to MongoDB
+  socket.on('createChat', async (chatName) => {
+    const chat = new Chat({ name: chatName, messages: [] });
+    await chat.save();
+    socket.emit('chatCreated', { id: chat._id, name: chatName });
+    console.log(`Chat created: ${chat._id} - ${chatName}`);
   });
 
-  socket.on('joinChat', (chatId) => {
+  // Join an existing chat by fetching it from MongoDB
+  socket.on('joinChat', async (chatId) => {
     console.log(`Attempting to join chat: ${chatId}`);
-    if (chats.has(chatId)) {
-      const chat = chats.get(chatId);
-      if (!socket.rooms.has(chatId)) {
-        socket.join(chatId);
-        console.log(`User ${username || 'Unknown'} joined chat: ${chatId}`);
-      } else {
-        console.log(`User ${username || 'Unknown'} already in chat: ${chatId}`);
-      }
+    const chat = await Chat.findById(chatId);
+    if (chat) {
+      socket.join(chatId);
+      console.log(`User ${username || 'Unknown'} joined chat: ${chatId}`);
       socket.emit('chatJoined', { chatId, chatName: chat.name, messages: chat.messages });
     } else {
       console.log(`Chat not found: ${chatId}`);
@@ -95,23 +104,24 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('sendMessage', ({ chatId, message }) => {
-    if (chats.has(chatId)) {
-      const chat = chats.get(chatId);
+  // Send a message in a chat and save it to MongoDB
+  socket.on('sendMessage', async ({ chatId, message }) => {
+    const chat = await Chat.findById(chatId);
+    if (chat) {
       const fullMessage = `${username}: ${message}`;
       chat.messages.push(fullMessage);
+      await chat.save();
       io.to(chatId).emit('newMessage', fullMessage);
-  
+
       // Send push notifications to all users in the chat except the sender
       const chatUsers = getChatUsers(chatId);
-      
       chatUsers.forEach(chatUsername => {
         if (chatUsername !== username) {
           const subscription = subscriptions.get(chatUsername);
           if (subscription) {
             console.log('Sending notification to:', chatUsername);
             const payload = JSON.stringify({
-              title: 'New Message in ' + getChatName(chatId),
+              title: 'New Message in ' + chat.name,
               body: `${username}: ${message}`
             });
             webpush.sendNotification(subscription, payload)
@@ -127,27 +137,23 @@ io.on('connection', (socket) => {
       });
     }
   });
-   
 
+  // Handle client disconnection
   socket.on('disconnect', () => {
     console.log('Client disconnected');
   });
 
+  // Remove a chat from the user's list and leave the chat room
   socket.on('removeChat', async (chatId) => {
-    // Remove the chat from this user's list in localStorage
     let userChats = JSON.parse(socket.handshake.auth.userChats || '[]');
     userChats = userChats.filter(id => id !== chatId);
     socket.handshake.auth.userChats = JSON.stringify(userChats);
-
-    // Remove the user from the chat room
     socket.leave(chatId);
-
-    // Notify the client that the chat has been removed
     socket.emit('chatRemoved', chatId);
   });
-  
 });
 
+// Helper function to get users in a chat room
 function getChatUsers(chatId) {
   const room = io.sockets.adapter.rooms.get(chatId);
   if (!room) return [];
@@ -155,11 +161,6 @@ function getChatUsers(chatId) {
     const socket = io.sockets.sockets.get(socketId);
     return socket ? socket.username : null;
   }).filter(username => username !== null);
-}
-
-function getChatName(chatId) {
-  const chat = chats.get(chatId);
-  return chat ? chat.name : 'Unknown Chat';
 }
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

@@ -36,3 +36,12 @@ function playNotificationSound() {
     setTimeout(resolve, 1000);
   });
 }
+
+self.addEventListener('notificationclick', function(event) {
+  console.log('Notification click received', event);
+  event.notification.close();
+  
+  event.waitUntil(
+    clients.openWindow('/')
+  );
+});
