@@ -41,6 +41,40 @@ webpush.setVapidDetails(
 
 const subscriptions = new Map();
 
+// Helper function to get users in a chat room
+function getChatUsers(chatId) {
+  const room = io.sockets.adapter.rooms.get(chatId);
+  if (!room) return [];
+  return Array.from(room).map(socketId => {
+    const socket = io.sockets.sockets.get(socketId);
+    return socket ? socket.username : null;
+  }).filter(username => username !== null);
+}
+
+function sendPushNotifications(chatId, chatName, senderUsername, message) {
+  const chatUsers = getChatUsers(chatId);
+  chatUsers.forEach(chatUsername => {
+    if (chatUsername !== senderUsername) {
+      const subscription = subscriptions.get(chatUsername);
+      if (subscription) {
+        console.log('Sending notification to:', chatUsername);
+        const payload = JSON.stringify({
+          title: 'New Message in ' + chatName,
+          body: `${senderUsername}: ${message}`
+        });
+        webpush.sendNotification(subscription, payload)
+          .then(() => console.log('Notification sent successfully to', chatUsername))
+          .catch(error => {
+            console.error('Error sending notification to', chatUsername, error);
+            subscriptions.delete(chatUsername);
+          });
+      } else {
+        console.log('No subscription found for user:', chatUsername);
+      }
+    }
+  });
+}
+
 app.get('/vapidPublicKey', (req, res) => {
   res.json({ vapidPublicKey: process.env.VAPID_PUBLIC_KEY});
 });
@@ -75,59 +109,54 @@ io.on('connection', (socket) => {
     console.log(`Username set: ${username}`);
   });
 
-  // Create a new chat and save it to MongoDB
-  socket.on('createChat', async (chatName) => {
-    const chat = new Chat({ name: chatName, messages: [] });
-    await chat.save();
-    socket.emit('chatCreated', { id: chat._id, name: chatName });
-    console.log(`Chat created: ${chat._id} - ${chatName}`);
-  });
-
-  // Join an existing chat by fetching it from MongoDB
   socket.on('joinChat', async (chatId) => {
-    console.log(`Attempting to join chat: ${chatId}`);
-    const chat = await Chat.findById(chatId);
-    if (chat) {
-      socket.join(chatId);
-      console.log(`User ${username || 'Unknown'} joined chat: ${chatId}`);
-      socket.emit('chatJoined', { chatId, chatName: chat.name, messages: chat.messages });
-    } else {
-      console.log(`Chat not found: ${chatId}`);
-      socket.emit('error', 'Chat not found');
+    try {
+      const chat = await Chat.findById(chatId);
+      if (chat) {
+        socket.join(chatId);
+        socket.emit('chatJoined', { chatId, chatName: chat.name, messages: chat.messages });
+      } else {
+        socket.emit('error', 'Chat not found');
+      }
+    } catch (error) {
+      console.error('Error joining chat:', error);
+      socket.emit('error', 'Failed to join chat');
     }
   });
 
-  // Send a message in a chat and save it to MongoDB
+    // Create a new chat and save it to MongoDB
+  socket.on('createChat', async (chatName) => {
+    try {
+      const chat = new Chat({ name: chatName, messages: [] });
+      await chat.save();
+      socket.emit('chatCreated', { id: chat._id, name: chatName });
+      console.log(`Chat created: ${chat._id} - ${chatName}`);
+    } catch (error) {
+      console.error('Error creating chat:', error);
+      socket.emit('error', 'Failed to create chat');
+    }
+  });
+  
+  // Join an existing chat by fetching it from MongoDB
   socket.on('sendMessage', async ({ chatId, message }) => {
-    const chat = await Chat.findById(chatId);
-    if (chat) {
+    try {
+      const chat = await Chat.findById(chatId);
+      if (!chat) {
+        throw new Error('Chat not found');
+      }
+  
       const fullMessage = `${username}: ${message}`;
       chat.messages.push(fullMessage);
       await chat.save();
+  
       io.to(chatId).emit('newMessage', fullMessage);
-
-      // Send push notifications to all users in the chat except the sender
-      const chatUsers = getChatUsers(chatId);
-      chatUsers.forEach(chatUsername => {
-        if (chatUsername !== username) {
-          const subscription = subscriptions.get(chatUsername);
-          if (subscription) {
-            console.log('Sending notification to:', chatUsername);
-            const payload = JSON.stringify({
-              title: 'New Message in ' + chat.name,
-              body: `${username}: ${message}`
-            });
-            webpush.sendNotification(subscription, payload)
-              .then(() => console.log('Notification sent successfully to', chatUsername))
-              .catch(error => {
-                console.error('Error sending notification to', chatUsername, error);
-                subscriptions.delete(chatUsername);
-              });
-          } else {
-            console.log('No subscription found for user:', chatUsername);
-          }
-        }
-      });
+  
+      // Send push notifications
+      sendPushNotifications(chatId, chat.name, username, message);
+  
+    } catch (error) {
+      console.error('Error sending message:', error);
+      socket.emit('error', 'Failed to send message');
     }
   });
 
@@ -145,15 +174,5 @@ io.on('connection', (socket) => {
     socket.emit('chatRemoved', chatId);
   });
 });
-
-// Helper function to get users in a chat room
-function getChatUsers(chatId) {
-  const room = io.sockets.adapter.rooms.get(chatId);
-  if (!room) return [];
-  return Array.from(room).map(socketId => {
-    const socket = io.sockets.sockets.get(socketId);
-    return socket ? socket.username : null;
-  }).filter(username => username !== null);
-}
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

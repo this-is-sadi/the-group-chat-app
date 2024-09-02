@@ -1,5 +1,18 @@
 const socket = io();
 
+socket.on('connect', () => {
+  console.log('Connected to server');
+});
+
+socket.on('connect_error', (error) => {
+  console.error('Connection error:', error);
+});
+
+socket.on('error', (errorMessage) => {
+  console.error('Server error:', errorMessage);
+  alert(`An error occurred: ${errorMessage}`);
+});
+
 const usernameSection = document.getElementById('usernameSection');
 const joinDiv = document.getElementById('join');
 const chatDiv = document.getElementById('chat');
@@ -16,11 +29,172 @@ const currentUsernameSpan = document.getElementById('currentUsername');
 const shareLinkDiv = document.getElementById('shareLink');
 const notificationSound = new Audio('/public/sounds/notification.mp3');
 
+
+
 let isJoining = false; // New flag to prevent multiple join attempts
 let currentChatId = null;
 let username = null;
-
 let vapidPublicKey;
+
+socket.on('usernameSet', (newUsername) => {
+  console.log('Username set:', newUsername);
+  username = newUsername;
+  localStorage.setItem('username', username);
+  currentUsernameSpan.textContent = `Logged in as: ${username}`;
+  usernameSection.style.display = 'none';
+
+  // Subscribe to push notifications
+  if ('serviceWorker' in navigator && 'PushManager' in window) {
+    getVapidPublicKey()
+      .then(() => navigator.serviceWorker.register('/service-worker.js'))
+      .then(function(registration) {
+        console.log('Service Worker registered successfully:', registration);
+        return registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+        });
+      })
+      .then(function(subscription) {
+        console.log('User is subscribed:', subscription);
+        return fetch('/api/save-subscription/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ subscription, username }) // Include username here
+        });
+      })
+      .then(function(response) {
+        if (!response.ok) {
+          throw new Error('Bad status code from server.');
+        }
+        return response.json();
+      })
+      .then(function(responseData) {
+        if (!(responseData.data && responseData.data.success)) {
+          throw new Error('Bad response from server.');
+        }
+        console.log('Subscription sent to server successfully');
+      })
+      .catch(function(error) {
+        console.error('Error:', error);
+      });
+  }
+
+  const pendingChatId = localStorage.getItem('pendingChatId');
+  if (pendingChatId) {
+    console.log('Joining pending chat:', pendingChatId);
+    joinChat(pendingChatId);
+    localStorage.removeItem('pendingChatId');
+  } else {
+    console.log('Showing join section');
+    joinDiv.style.display = 'block';
+  }
+});
+
+socket.on('chatCreated', ({ id, name }) => {
+  console.log(`Chat created: ${id} - ${name}`);
+  // Update your UI here, e.g., add the new chat to the list
+  updateChatList();
+  // Optionally, join the newly created chat
+  joinChat(id, name);
+});
+
+socket.on('chatJoined', ({ chatId, chatName, messages }) => {
+  // Update the chat name in the UI
+  currentChatNameH2.textContent = chatName || 'Unnamed Chat';
+  
+  // Update or add the chat in local storage
+  let chats = JSON.parse(localStorage.getItem('chats') || '[]');
+  const existingChatIndex = chats.findIndex(chat => chat.id === chatId);
+  if (existingChatIndex !== -1) {
+    chats[existingChatIndex].name = chatName;
+  } else {
+    chats.push({ id: chatId, name: chatName });
+  }
+  localStorage.setItem('chats', JSON.stringify(chats));
+
+  // Join the chat (this will update the UI elements)
+  joinChat(chatId, chatName);
+
+  // Display messages
+  const messagesDiv = document.getElementById('messages');
+  messagesDiv.innerHTML = messages.map(m => `<p>${m}</p>`).join('');
+  messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+  // Update the chat list in the UI
+  updateChatList();
+});
+
+socket.on('newMessage', (message) => {
+  addMessageToChat(message);
+
+  // Play sound if the window is not focused
+  if (!document.hasFocus()) {
+    notificationSound.play().catch(e => console.log('Error playing sound:', e));
+  }
+});
+
+socket.on('error', (error) => {
+  alert(error);
+  isJoining = false; // Reset the joining flag in case of error
+});
+
+socket.on('chatRemoved', function(chatId) {
+  // Remove the chat from the user's chat list
+  const chatElement = document.querySelector(`[data-chat-id="${chatId}"]`);
+  if (chatElement) {
+      chatElement.remove();
+  }
+  
+  // If the user is currently in the removed chat, go back to the chat list
+  if (currentChatId === chatId) {
+      document.getElementById('chat').style.display = 'none';
+      document.getElementById('join').style.display = 'block';
+      currentChatId = null;
+  }
+  
+  // Update the chat list in the UI
+  updateChatList();
+});
+
+socket.on('chatDeleted', function() {
+  document.getElementById('messages').innerHTML = '';
+  document.getElementById('chat').style.display = 'none';
+  document.getElementById('join').style.display = 'block';
+  alert('The chat has been deleted.');
+  updateChatList(); // Assuming you have this function to refresh the chat list
+});
+
+
+function createChat() {
+  const chatName = prompt("Enter a name for the new chat:");
+  if (chatName && chatName.trim() !== '') {
+    socket.emit('createChat', chatName.trim());
+  }
+}
+
+function updateChatList() {
+  const chats = JSON.parse(localStorage.getItem('chats') || '[]');
+  const chatListDiv = document.getElementById('chatList');
+  chatListDiv.innerHTML = chats.map(chat => 
+    `<div class="chat-item" data-chat-id="${chat.id}">${chat.name}</div>`
+  ).join('');
+  
+  chatListDiv.querySelectorAll('.chat-item').forEach(item => {
+    item.addEventListener('click', () => {
+      joinChat(item.dataset.chatId, item.textContent);
+    });
+  });
+}
+
+function leaveCurrentChat() {
+  currentChatId = null;
+  chatDiv.style.display = 'none';
+  joinDiv.style.display = 'block';
+  messagesDiv.innerHTML = '';
+  updateChatList();
+}
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
@@ -107,21 +281,6 @@ function joinChat(chatId, chatName) {
   isJoining = false;
 }
 
-
-function updateChatList() {
-  const chats = JSON.parse(localStorage.getItem('chats') || '[]');
-  const chatListDiv = document.getElementById('chatList');
-  chatListDiv.innerHTML = chats.map(chat => 
-    `<div class="chat-item" data-chat-id="${chat.id}">${chat.name}</div>`
-  ).join('');
-  
-  chatListDiv.querySelectorAll('.chat-item').forEach(item => {
-    item.addEventListener('click', () => {
-      joinChat(item.dataset.chatId, item.textContent);
-    });
-  });
-}
-
 function getChatIdFromUrl() {
   const pathParts = window.location.pathname.split('/');
   return pathParts[pathParts.length - 1];
@@ -141,13 +300,6 @@ function setUsername() {
   }
 }
 
-document.getElementById('createChat').addEventListener('click', function() {
-  const chatName = prompt("Enter a name for the new chat:");
-  if (chatName && chatName.trim() !== '') {
-    socket.emit('createChat', chatName.trim());
-  }
-});
-
 leaveChatBtn.addEventListener('click', () => {
   leaveCurrentChat();
 });
@@ -166,142 +318,10 @@ function sendMessage() {
   }
 }
 
-socket.on('usernameSet', (newUsername) => {
-  console.log('Username set:', newUsername);
-  username = newUsername;
-  localStorage.setItem('username', username);
-  currentUsernameSpan.textContent = `Logged in as: ${username}`;
-  usernameSection.style.display = 'none';
-
-  // Subscribe to push notifications
-  if ('serviceWorker' in navigator && 'PushManager' in window) {
-    getVapidPublicKey()
-      .then(() => navigator.serviceWorker.register('/service-worker.js'))
-      .then(function(registration) {
-        console.log('Service Worker registered successfully:', registration);
-        return registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
-        });
-      })
-      .then(function(subscription) {
-        console.log('User is subscribed:', subscription);
-        return fetch('/api/save-subscription/', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(subscription)
-        });
-      })
-      .then(function(response) {
-        if (!response.ok) {
-          throw new Error('Bad status code from server.');
-        }
-        return response.json();
-      })
-      .then(function(responseData) {
-        if (!(responseData.data && responseData.data.success)) {
-          throw new Error('Bad response from server.');
-        }
-        console.log('Subscription sent to server successfully');
-      })
-      .catch(function(error) {
-        console.error('Error:', error);
-      });
-  }
-
-  const pendingChatId = localStorage.getItem('pendingChatId');
-  if (pendingChatId) {
-    console.log('Joining pending chat:', pendingChatId);
-    joinChat(pendingChatId);
-    localStorage.removeItem('pendingChatId');
-  } else {
-    console.log('Showing join section');
-    joinDiv.style.display = 'block';
-  }
-});
-
-socket.on('chatCreated', ({ id, name }) => {
-  joinChat(id, name);
-  let chats = JSON.parse(localStorage.getItem('chats') || '[]');
-  if (!chats.some(chat => chat.id === id)) {
-    chats.push({ id, name });
-    localStorage.setItem('chats', JSON.stringify(chats));
-  }
-  updateChatList();
-});
-
-socket.on('chatJoined', ({ chatId, chatName, messages }) => {
-  // Update the chat name in the UI
-  currentChatNameH2.textContent = chatName || 'Unnamed Chat';
-  
-  // Update or add the chat in local storage
-  let chats = JSON.parse(localStorage.getItem('chats') || '[]');
-  const existingChatIndex = chats.findIndex(chat => chat.id === chatId);
-  if (existingChatIndex !== -1) {
-    chats[existingChatIndex].name = chatName;
-  } else {
-    chats.push({ id: chatId, name: chatName });
-  }
-  localStorage.setItem('chats', JSON.stringify(chats));
-
-  // Join the chat (this will update the UI elements)
-  joinChat(chatId, chatName);
-
-  // Display messages
-  const messagesDiv = document.getElementById('messages');
-  messagesDiv.innerHTML = messages.map(m => `<p>${m}</p>`).join('');
-  messagesDiv.scrollTop = messagesDiv.scrollHeight;
-
-  // Update the chat list in the UI
-  updateChatList();
-});
-
-socket.on('newMessage', (message) => {
-  addMessageToChat(message);
-
-  // Play sound if the window is not focused
-  if (!document.hasFocus()) {
-    notificationSound.play().catch(e => console.log('Error playing sound:', e));
-  }
-});
-
-socket.on('error', (error) => {
-  alert(error);
-  isJoining = false; // Reset the joining flag in case of error
-});
-
 document.getElementById('deleteChat').addEventListener('click', function() {
   if (confirm('Are you sure you want to remove this chat from your list? You can still rejoin using the invite link.')) {
       socket.emit('removeChat', currentChatId);
   }
-});
-
-socket.on('chatRemoved', function(chatId) {
-  // Remove the chat from the user's chat list
-  const chatElement = document.querySelector(`[data-chat-id="${chatId}"]`);
-  if (chatElement) {
-      chatElement.remove();
-  }
-  
-  // If the user is currently in the removed chat, go back to the chat list
-  if (currentChatId === chatId) {
-      document.getElementById('chat').style.display = 'none';
-      document.getElementById('join').style.display = 'block';
-      currentChatId = null;
-  }
-  
-  // Update the chat list in the UI
-  updateChatList();
-});
-
-socket.on('chatDeleted', function() {
-  document.getElementById('messages').innerHTML = '';
-  document.getElementById('chat').style.display = 'none';
-  document.getElementById('join').style.display = 'block';
-  alert('The chat has been deleted.');
-  updateChatList(); // Assuming you have this function to refresh the chat list
 });
 
 function requestNotificationPermission() {
@@ -369,15 +389,6 @@ function init() {
   const savedUsername = localStorage.getItem('username');
   const chatIdFromUrl = getChatIdFromUrl();
 
-  requestNotificationPermission()
-    .then(subscribeUserToPush)
-    .then(function(subscription) {
-      return sendSubscriptionToServer(subscription);
-    })
-    .catch(function(err) {
-      console.log('Failed to set up push notifications:', err);
-    });
-
   console.log('Initializing app:', { savedUsername, chatIdFromUrl });
 
   updateChatList(); // Update the chat list in the UI
@@ -404,9 +415,6 @@ function init() {
     console.log('No username or chat ID, showing username section');
     usernameSection.style.display = 'block';
   }
-
-  updateChatList();
-  registerServiceWorker();
   
   // Add event listeners
   document.getElementById('setUsername').addEventListener('click', setUsername);
